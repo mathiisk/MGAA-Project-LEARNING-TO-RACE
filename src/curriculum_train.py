@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 TMRL_DATA = Path("C:/Users/Matiss/TmrlData")
-REWARD_DIR = TMRL_DATA / "rewards"       # put your reward_trackN.pkl files here
+REWARD_DIR = TMRL_DATA / "reward"       # put your reward_trackN.pkl files here
 CHECKPOINT_DIR = TMRL_DATA / "checkpoints"
 
 # Define your curriculum stages
