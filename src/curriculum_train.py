@@ -4,10 +4,10 @@ import time
 from pathlib import Path
 
 TMRL_DATA = Path("C:/Users/Matiss/TmrlData")
-REWARD_DIR = TMRL_DATA / "reward"       # put your reward_trackN.pkl files here
+REWARD_DIR = TMRL_DATA / "reward"       # put our reward_trackN.pkl files here
 CHECKPOINT_DIR = TMRL_DATA / "checkpoints"
 
-# Define your curriculum stages
+# Define our curriculum stages
 STAGES = [
     {
         "name": "STRAIGHT-ROAD",
@@ -34,12 +34,13 @@ def switch_track(reward_file: Path):
     dest = TMRL_DATA / "reward.pkl"
     shutil.copy(reward_file, dest)
     print(f"Switched reward to: {reward_file.name}")
+    
 
 def run_stage(stage: dict):
     print(f"\n=== Starting stage: {stage['name']} ===")
     switch_track(stage["reward_file"])
     
-    # You manually start --server, --trainer, --worker in separate terminals
+    # We manually start --server, --trainer, --worker in separate terminals
     # This script just signals you when to stop and advance
     input(f"Start your 3 tmrl terminals now, then press Enter when done training stage '{stage['name']}'...")
     print(f"Stage {stage['name']} complete. Weights are saved automatically by tmrl.")
