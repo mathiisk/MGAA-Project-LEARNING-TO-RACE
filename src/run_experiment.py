@@ -30,6 +30,9 @@ Results
 -------
     results/<RUN_NAME>.csv — written by the worker, one row per episode.
     After all variants finish: python src/plot_results.py
+
+Offline sanity check (no TrackMania needed):
+    python src/envs/augmented_lidar_env.py --variant C --track rewards/reward_track1.pkl
 """
 
 import argparse
@@ -74,6 +77,10 @@ def _set_config(variant: str) -> str:
     return run_name
 
 
+# ---------------------------------------------------------------------------
+# Env factory
+# ---------------------------------------------------------------------------
+
 def make_env_cls(variant: str, track_pkl: str, n_waypoints: int, stride: int, run_name: str):
     """
     Return a no-arg env class for TMRL to instantiate.
@@ -105,37 +112,32 @@ def make_env_cls(variant: str, track_pkl: str, n_waypoints: int, stride: int, ru
     return EnvCls
 
 
+# ---------------------------------------------------------------------------
+# Role runners
+#
+# Server and Trainer delegate directly to `python -m tmrl` — they never
+# instantiate the env, so there's no reason to fight TMRL's internal API.
+# TMRL_CONFIG_PATH is already set, so they pick up the right config.
+#
+# Only the Worker needs our custom env_cls, because that's the only process
+# that actually calls env_cls() to collect experience.
+# ---------------------------------------------------------------------------
+
 def run_server():
-    from tmrl.networking import Server
-    server = Server()
-    while True:
-        server.run()
+    """Delegate to tmrl's own server — it reads everything from TMRL_CONFIG_PATH."""
+    import subprocess, sys
+    subprocess.run([sys.executable, "-m", "tmrl", "--server"], check=True)
 
 
 def run_trainer(env_cls):
-    import tmrl.config.config_constants as cfg
-    import tmrl.config.config_objects as cfg_obj
-    from tmrl.networking import Trainer
-    from tmrl.training_offline import TorchTrainingOffline
-
-    training = TorchTrainingOffline(
-        env_cls=env_cls,
-        memory_cls=cfg_obj.MEM,
-        training_agent_cls=cfg_obj.TRAINER,
-        epochs=cfg.TMRL_CONFIG["MAX_EPOCHS"],
-        rounds=cfg.TMRL_CONFIG["ROUNDS_PER_EPOCH"],
-        steps=cfg.TMRL_CONFIG["TRAINING_STEPS_PER_ROUND"],
-        update_buffer_interval=cfg.TMRL_CONFIG["UPDATE_BUFFER_INTERVAL"],
-        update_model_interval=cfg.TMRL_CONFIG["UPDATE_MODEL_INTERVAL"],
-        max_training_steps_per_env_step=cfg.TMRL_CONFIG["MAX_TRAINING_STEPS_PER_ENVIRONMENT_STEP"],
-    )
-    trainer = Trainer(
-        training_cls=training,
-        server_ip=cfg.SERVER_IP_FOR_TRAINER,
-        model_path=cfg.MODEL_PATH_TRAINER,
-        checkpoint_path=cfg.CHECKPOINT_PATH,
-    )
-    trainer.run()
+    """
+    Delegate to tmrl's own trainer — the trainer only does gradient updates
+    on replay buffer data and never instantiates the env directly.
+    Our custom env_cls is not needed here; the network input size is inferred
+    from the data already in the buffer (collected by the worker).
+    """
+    import subprocess, sys
+    subprocess.run([sys.executable, "-m", "tmrl", "--trainer"], check=True)
 
 
 def run_worker(env_cls):
@@ -154,10 +156,13 @@ def run_worker(env_cls):
         obs_preprocessor=cfg_obj.OBS_PREPROCESSOR,
         model_path=cfg.MODEL_PATH_WORKER,
         crc_debug=False,
-        model_path_update_buffer=cfg.REPLAY_MEMORY_PATH,
     )
     worker.run()
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -173,16 +178,8 @@ def main():
                         help="Waypoint stride in raw-point units (10 = 1 m apart)")
     args = parser.parse_args()
 
-    # Must happen before any tmrl import
+    # Set TMRL_CONFIG_PATH before any tmrl import — subprocess inherits it too
     run_name = _set_config(args.variant)
-
-    env_cls = make_env_cls(
-        variant=args.variant,
-        track_pkl=args.track,
-        n_waypoints=args.n_waypoints,
-        stride=args.stride,
-        run_name=run_name,
-    )
 
     obs_note = {
         "A": "81-dim LiDAR",
@@ -192,11 +189,21 @@ def main():
     }[args.variant]
     print(f"[run_experiment] variant={args.variant} | role={args.role} | obs={obs_note}\n")
 
+    # Server and trainer delegate to `python -m tmrl` — they never touch the env.
+    # TMRL_CONFIG_PATH is inherited by the subprocess so the right config is used.
     if args.role == "server":
         run_server()
     elif args.role == "trainer":
-        run_trainer(env_cls)
+        run_trainer(env_cls=None)
     elif args.role == "worker":
+        # Only the worker needs the custom env — build it here
+        env_cls = make_env_cls(
+            variant=args.variant,
+            track_pkl=args.track,
+            n_waypoints=args.n_waypoints,
+            stride=args.stride,
+            run_name=run_name,
+        )
         run_worker(env_cls)
 
 
