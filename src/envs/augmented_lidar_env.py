@@ -83,7 +83,7 @@ def get_lookahead_waypoints(car_xz: np.ndarray, line: np.ndarray, n_waypoints: i
     Returns: 
         np.ndarray: (n_waypoints * 2,) array of (dx, dz) offsets, normalised by a fixed scale so values stay reasonable
     """
-    line_xz = [line[:, 0, 2]] # drop y, thus (N, 2)
+    line_xz = line[:, [0, 2]] # drop y, thus (N, 2)
     closest = find_closest_index(car_xz, line_xz)
     n_total = len(line_xz)
     
@@ -124,22 +124,37 @@ class WaypointAugmentedEnv(_GymWrapper):
             self.line = centerline
             
         
-        # extend observation space
+        # Extend the observation space.
+        # TMRL's raw env uses a Tuple obs space (speed, prev_acts, lidar).
+        # We declare a flat Box of the correct total size.
         base_obs_space = env.observation_space
         extra = n_waypoints * 2
-        new_low = np.concatenate([base_obs_space.low, np.full(extra, -np.inf, dtype=np.float32)])
-        new_high = np.concatenate([base_obs_space.high, np.full(extra, np.inf, dtype=np.float32)])
-        
-        # build minimal box-like space
+
+        try:
+            # Tuple space: sum flat sizes of each sub-space
+            base_dim = sum(int(np.prod(s.shape)) for s in base_obs_space.spaces)
+        except Exception:
+            try:
+                base_dim = int(np.prod(base_obs_space.shape))
+            except Exception:
+                base_dim = 81  # TMRL TM20LIDAR fallback
+
+        total_dim = base_dim + extra
+
         if gym is not None:
-            self.observation_space = gym.spaces.Box(low=new_low, high=new_high, dtype=np.float32)
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf, high=np.inf, shape=(total_dim,), dtype=np.float32
+            )
         else:
             class _Box:
-                def __init__(self, low, high):
-                    self.low, self.high = low, high
-                    self.shape = low.shape
+                def __init__(self, dim):
+                    self.low  = np.full(dim, -np.inf, dtype=np.float32)
+                    self.high = np.full(dim,  np.inf, dtype=np.float32)
+                    self.shape = (dim,)
                     self.dtype = np.float32
-            self.observation_space = _Box(new_low, new_high)
+            self.observation_space = _Box(total_dim)
+
+        self._base_dim = base_dim
         self._extra_dim = extra
         
     
@@ -171,34 +186,24 @@ class WaypointAugmentedEnv(_GymWrapper):
             return self.line[0, [0,2]].copy()
             
 
-    def _augment(self, obs: np.ndarray) -> np.ndarray:
-        """#TODO
-        _summary_ 
-
-        Args: #TODO
-            obs (np.ndarray): _description_
-
-        Returns: #TODO
-            np.ndarray: _description_
-        """
+    def _augment(self, obs) -> np.ndarray:
+        """Flatten obs (handles Tuple or flat array), then append waypoints."""
         car_xz = self._get_car_xz()
         extra = get_lookahead_waypoints(car_xz, self.line, self.n_waypoints, self.stride)
-        return np.concatenate([obs.flatten(), extra]).astype(np.float32)
+        # TMRL returns a Tuple of arrays before obs_preprocessor flattens it
+        if isinstance(obs, (tuple, list)):
+            flat = np.concatenate([np.array(o).flatten() for o in obs])
+        else:
+            flat = np.array(obs).flatten()
+        return np.concatenate([flat, extra]).astype(np.float32)
         
         
     def reset(self, **kwargs):
-        """#TODO
-        _summary_
-
-        Returns:#TODO
-            _type_: _description_
-        """
         result = self.env.reset(**kwargs)
-        # depending on gym version, reset() can return (obs, info) or just obs
         if isinstance(result, tuple):
             obs, info = result
-            return self._augment(obs), info
-        return self._augment(result)
+            return obs, info
+        return result
     
     
     def step(self, action):
@@ -214,9 +219,9 @@ class WaypointAugmentedEnv(_GymWrapper):
         result = self.env.step(action)
         if len(result) == 5:
             obs, reward, terminated, truncated, info = result
-            return self._augment(obs), reward, terminated, truncated, info
+            return obs, reward, terminated, truncated, info
         obs, reward, done, info = result
-        return self._augment(obs), reward, done, info
+        return obs, reward, done, info
     
         
 if __name__ == "__main__":
@@ -225,6 +230,3 @@ if __name__ == "__main__":
     parser.add_argument("--track", default="rewards/reward_track1.pkl")
     parser.add_argument("--n_waypoints", type=int, default=5)
     args = parser.parse_args()
-    
-        
-        
