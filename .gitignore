@@ -1,0 +1,31 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.cpython-*.pyc
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+
+# VS Code
+.vscode/
+
+# Checkpoints & model weights
+checkpoints/
+*.tcpt
+*.tmod
+*.pkl
+*.pth
+
+# Logs & results
+*.log
+results/
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db

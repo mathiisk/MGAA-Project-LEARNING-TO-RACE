@@ -63,7 +63,8 @@ def _set_config(variant: str) -> str:
     # TMRL always reads from ~/TmrlData/config.json
     tmrl_data = Path.home() / "TmrlData"
     tmrl_data.mkdir(parents=True, exist_ok=True)
-    dest = tmrl_data / "config.json"
+    dest = tmrl_data / "config" / "config.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.copy(src, dest)
 
@@ -199,15 +200,18 @@ def run_server():
     )
 
 
-def run_trainer(env_cls):
+def run_trainer(env_cls, wandb=False):
     """
     Delegate to `python -m tmrl --trainer`.
     ~/TmrlData/config.json is already set to the right variant config
     by _set_config(), so tmrl picks it up automatically.
     """
     import subprocess, sys
+    cmd = [sys.executable, "-m", "tmrl", "--trainer"]
+    if wandb:
+        cmd.append("--wandb")
     subprocess.run(
-        [sys.executable, "-m", "tmrl", "--trainer"],
+        cmd,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
         check=True,
     )
@@ -306,6 +310,8 @@ def main():
     parser.add_argument("--n_waypoints", type=int, default=5)
     parser.add_argument("--stride", type=int, default=10,
                         help="Waypoint stride in raw-point units (10 = 1 m apart)")
+    parser.add_argument("--wandb", action="store_true",
+                    help="Enable WandB logging for the trainer.")
     args = parser.parse_args()
 
     # Set TMRL_CONFIG_PATH before any tmrl import — subprocess inherits it too
@@ -324,7 +330,7 @@ def main():
     if args.role == "server":
         run_server()
     elif args.role == "trainer":
-        run_trainer(env_cls=None)
+        run_trainer(env_cls=None, wandb=args.wandb)
     elif args.role == "worker":
         # Install the reward file for this track BEFORE building the env.
         # This is what makes --track actually control the reward signal.
