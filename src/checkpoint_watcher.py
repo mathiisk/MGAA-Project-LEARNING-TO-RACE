@@ -1,6 +1,4 @@
 """
-checkpoint_watcher.py — never lose a good model again.
-
 Watches TMRL's checkpoint and weights files and saves timestamped copies
 into your repo's checkpoints/ folder every time TMRL saves.
 
@@ -29,18 +27,24 @@ from pathlib import Path
 
 POLL_INTERVAL = 5.0  # seconds between checks
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def get_run_name(config_path: Path) -> str:
+    """
+    Read RUN_NAME from a tmrl-style config JSON.
+
+    Args:
+        config_path: Path to the config file (e.g. config/config.json).
+
+    Returns:
+        The RUN_NAME string, used to locate TMRL's checkpoint and weights files.
+    """
     with open(config_path) as f:
         return json.load(f)["RUN_NAME"]
 
 
 def tmrl_paths(run_name: str) -> dict:
-    """Return the two file paths TMRL writes for a given run name."""
+    """
+    Return the three file paths TMRL writes for a given run name.
+    """
     base = Path.home() / "TmrlData"
     return {
         "tcpt":   base / "checkpoints" / f"{run_name}_t.tcpt",
@@ -50,6 +54,13 @@ def tmrl_paths(run_name: str) -> dict:
 
 
 def latest_episode_reward(csv_path: Path) -> float | None:
+    """
+    Pull the episode_reward from the last data row in our CSV log.
+    Used to label checkpoint folders with the reward at save time.
+
+    Returns None if the file doesn't exist, is empty, or can't be parsed,
+    we'd rather save an unlabelled checkpoint than crash the watcher.
+    """
     if not csv_path.exists():
         return None
     try:
@@ -64,6 +75,11 @@ def latest_episode_reward(csv_path: Path) -> float | None:
 
 
 def best_reward_so_far(save_dir: Path) -> float:
+    """
+    Read the best reward seen so far from a small tracker file (.best_reward)
+    inside the checkpoint directory. Returns -inf if no tracker exists yet,
+    so the first real reward always counts as a new best.
+    """
     tracker = save_dir / ".best_reward"
     if not tracker.exists():
         return float("-inf")
@@ -74,14 +90,24 @@ def best_reward_so_far(save_dir: Path) -> float:
 
 
 def write_best_reward(save_dir: Path, reward: float):
+    """
+    Persist the current best reward to disk so it survives a watcher restart.
+    Just writes the float as plain text into .best_reward in the checkpoint dir.
+    """
     (save_dir / ".best_reward").write_text(str(reward))
 
 
-# ---------------------------------------------------------------------------
-# Watch loop
-# ---------------------------------------------------------------------------
-
 def watch(config_path: Path, project_root: Path):
+    """
+    Main polling loop. Every POLL_INTERVAL seconds, check whether TMRL has
+    written a new checkpoint by comparing the .tcpt file's modification time.
+    On a new save: copy both .tcpt and .tmod(s) into a timestamped subfolder,
+    and update the best/ folder if this reward beats the previous best.
+
+    Args:
+        config_path: Path to config JSON — used to read RUN_NAME.
+        project_root: Repo root — checkpoints are saved under project_root/checkpoints/.
+    """
     run_name = get_run_name(config_path)
     paths    = tmrl_paths(run_name)
     save_dir = project_root / "checkpoints" / run_name
@@ -105,7 +131,7 @@ def watch(config_path: Path, project_root: Path):
     while True:
         time.sleep(POLL_INTERVAL)
 
-        # Use .tcpt as the trigger — it's what the trainer writes last
+        # use .tcpt as the trigger, it's what the trainer writes last
         tcpt   = paths["tcpt"]
         tmod   = paths["tmod"]
         tmod_t = paths["tmod_t"]
@@ -123,7 +149,7 @@ def watch(config_path: Path, project_root: Path):
         reward     = latest_episode_reward(csv_path)
         reward_str = f"{reward:.2f}" if reward is not None else "unknown"
 
-        # Save into a subfolder: epoch_0001_reward_45.23/
+        # save into a subfolder: epoch_0001_reward_45.23/
         epoch_dir = save_dir / f"epoch_{epoch:04d}_reward_{reward_str}"
         epoch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -139,7 +165,7 @@ def watch(config_path: Path, project_root: Path):
 
         print(f"[watcher] epoch {epoch:04d} -> {epoch_dir.name}/  {saved}")
 
-        # Track best and save a copy
+        # track best and save a copy
         if reward is not None and reward > best:
             best = reward
             write_best_reward(save_dir, best)
@@ -151,12 +177,8 @@ def watch(config_path: Path, project_root: Path):
             if tmod_t.exists():
                 shutil.copy2(tmod_t, best_dir / tmod_t.name)
             print(f"[watcher] *** NEW BEST: {best:.2f} -> saved to checkpoints/{run_name}/best/ ***")
-
-
-# ---------------------------------------------------------------------------
-# Restore
-# ---------------------------------------------------------------------------
-
+            
+            
 def restore(epoch_dir: Path):
     """
     Copy a saved checkpoint folder back into TMRL's slots.
@@ -170,7 +192,7 @@ def restore(epoch_dir: Path):
     run_name = epoch_dir.parent.name
     dest     = tmrl_paths(run_name)
 
-    # Copy .tcpt
+    # copy .tcpt
     tcpt_files = list(epoch_dir.glob("*.tcpt"))
     if tcpt_files:
         dest["tcpt"].parent.mkdir(parents=True, exist_ok=True)
@@ -179,7 +201,7 @@ def restore(epoch_dir: Path):
     else:
         print(f"[restore] WARNING: no .tcpt file found in {epoch_dir}")
 
-    # Copy .tmod files (worker: RUN_NAME.tmod, trainer: RUN_NAME_t.tmod)
+    # copy .tmod files (worker: RUN_NAME.tmod, trainer: RUN_NAME_t.tmod)
     tmod_files = list(epoch_dir.glob("*.tmod"))
     if tmod_files:
         dest["tmod"].parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +215,7 @@ def restore(epoch_dir: Path):
     else:
         print(f"[restore] WARNING: no .tmod files found in {epoch_dir}")
 
-    # Ensure RESET_TRAINING is false
+    # ensure RESET_TRAINING is false
     tmrl_config = Path.home() / "TmrlData" / "config.json"
     if tmrl_config.exists():
         with open(tmrl_config) as f:
@@ -208,11 +230,12 @@ def restore(epoch_dir: Path):
     print(f"[restore] Done. Start training with RUN_NAME={run_name} and RESET_TRAINING=false.")
 
 
-# ---------------------------------------------------------------------------
-# List saved checkpoints
-# ---------------------------------------------------------------------------
-
 def list_checkpoints(project_root: Path):
+    """
+    Print a tree of all saved checkpoints under project_root/checkpoints/,
+    grouped by run name. Highlights the best/ folder for each run.
+    Useful for quickly seeing what's available before a --restore.
+    """
     ckpt_root = project_root / "checkpoints"
     if not ckpt_root.exists():
         print("No checkpoints saved yet.")
@@ -231,11 +254,13 @@ def list_checkpoints(project_root: Path):
             print(f"  best/  {files}  <- highest reward so far")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def main():
+    """
+    CLI entry point. Supports three modes:
+      - default:    run the file watcher (requires --config or uses the default path)
+      - --restore:  copy a saved epoch folder back into TMRL's data directory
+      - --list:     print all saved checkpoints and exit
+    """
     parser = argparse.ArgumentParser(
         description="Watch TMRL checkpoints and save timestamped copies to your repo.",
     )

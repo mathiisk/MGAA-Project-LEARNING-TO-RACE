@@ -1,38 +1,16 @@
 """
-run_experiment.py — unified launcher for all observation-space variants.
-
-Each variant has its own config file in config/. The launcher sets
-TMRL_CONFIG_PATH before TMRL loads anything, so every variant gets
-isolated model weights, checkpoints, replay memory, and results CSV.
-
 Usage (3 terminals per variant, same structure for all):
-    python src/run_experiment.py --variant A --role server
-    python src/run_experiment.py --variant A --role trainer
-    python src/run_experiment.py --variant A --role worker
-
-    python src/run_experiment.py --variant C --role server --track rewards/reward_track1.pkl
-    python src/run_experiment.py --variant C --role trainer --track rewards/reward_track1.pkl
-    python src/run_experiment.py --variant C --role worker  --track rewards/reward_track1.pkl
-
-Variants
---------
-    A  —  raw LiDAR only       (81-dim obs)
-    B  —  image / TM20FULL     (image stacked obs)
-    C  —  LiDAR + waypoints    (91-dim obs, centerline lookahead)
-    D  —  LiDAR + racing line  (91-dim obs, smoothed centerline)
-
-Step budget
------------
-    Controlled by MAX_EPOCHS in each config file.
-    Default: 20 epochs = ~100,000 env steps. Trainer stops automatically.
+    python src/run_experiment.py --role server
+    python src/run_experiment.py --role trainer
+    python src/run_experiment.py --role worker
 
 Results
 -------
-    results/<RUN_NAME>.csv — written by the worker, one row per episode.
-    After all variants finish: python src/plot_results.py
-
-Offline sanity check (no TrackMania needed):
-    python src/envs/augmented_lidar_env.py --variant C --track rewards/reward_track1.pkl
+    results/<RUN_NAME>.csv — written by the worker, one row per episodes
+    
+We can pass --wandb to the trainer to enable WandB logging.
+The worker always writes to CSV, regardless of WandB.
+config.json needs setup of wandb project and entity for WandB logging.
 """
 
 import argparse
@@ -46,21 +24,20 @@ CONFIG_DIR   = PROJECT_ROOT / "config"
 RESULTS_DIR  = PROJECT_ROOT / "results"
 
 
-def _set_config(variant: str) -> str:
+def _set_config() -> str:
     """
-    Copy the variant config to ~/TmrlData/config.json — the one path
+    Copy config/config.json to ~/TmrlData/config/config.json — the one path
     TMRL always reads, regardless of version or env vars.
     Returns the RUN_NAME so we can name the results CSV correctly.
     """
     import shutil
 
-    src = CONFIG_DIR / f"config_variant{variant}.json"
+    src = CONFIG_DIR / "config.json"
     if not src.exists():
         print(f"ERROR: config file not found: {src}")
-        print(f"  Expected: {CONFIG_DIR}/config_variant{{A,B,C,D}}.json")
+        print(f"  Expected: {CONFIG_DIR}/config.json")
         sys.exit(1)
 
-    # TMRL always reads from ~/TmrlData/config.json
     tmrl_data = Path.home() / "TmrlData"
     tmrl_data.mkdir(parents=True, exist_ok=True)
     dest = tmrl_data / "config" / "config.json"
@@ -94,8 +71,8 @@ def _install_reward_file(track_pkl: str):
         <TMRL_DATA>/reward/reward.pkl
     It has no concept of per-track files. So before the worker starts we
     copy the requested track file into that slot. This makes --track the
-    single source of truth: the reward signal and (for C/D) the waypoint
-    observations are guaranteed to come from the same track.
+    single source of truth: the reward signal is guaranteed to come from
+    the correct track file.
 
     Must run BEFORE the worker imports/starts tmrl.
     """
@@ -108,7 +85,6 @@ def _install_reward_file(track_pkl: str):
         print(f"ERROR: track reward file not found: {src}")
         sys.exit(1)
 
-    # TMRL_DATA is always ~/TmrlData — TMRL doesn't expose it as a constant
     tmrl_data = Path.home() / "TmrlData"
     dest_dir = tmrl_data / "reward"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -118,70 +94,40 @@ def _install_reward_file(track_pkl: str):
     print(f"[run_experiment] reward    -> copied {src.name} into {dest}")
 
 
-# ---------------------------------------------------------------------------
-# Env factory
-# ---------------------------------------------------------------------------
-
-class CarPosWrapper:
-    """StepCounterWrapper that also updates car_pos_ref on every step."""
-    def __init__(self, env, run_name, results_dir, car_pos_ref):
-        from envs.step_counter import StepCounterWrapper
-        self._sc = StepCounterWrapper(env, run_name=run_name, results_dir=results_dir)
-        self._ref = car_pos_ref
-        self.observation_space = self._sc.observation_space
-        self.action_space = self._sc.action_space
-
-    def reset(self, **kwargs):
-        return self._sc.reset(**kwargs)
-
-    def step(self, action):
-        result = self._sc.step(action)
-        # Update car position from game state
-        try:
-            state = self._sc.env.unwrapped.interface.game_state
-            self._ref[0] = [float(state[3]), float(state[5])]
-        except Exception:
-            pass
-        return result
-
-    def __getattr__(self, name):
-        return getattr(self._sc, name)
-
-
-def make_env_cls(variant, track_pkl, n_waypoints, stride, run_name, car_pos_ref=None):
+def make_env_cls(run_name):
     """
     Return a no-arg env class for TMRL to instantiate.
-    All variants get StepCounterWrapper so results CSVs are always written.
-    Variants C/D additionally get WaypointAugmentedEnv inside that.
+    Wraps the base TMRL env with StepCounterWrapper so results CSVs
+    are always written.
+
+    TMRL expects env_cls to be a callable that takes no arguments and returns
+    a ready-to-use environment. We achieve this by defining an inner class
+    whose __new__ builds the full wrapper stack and returns it.
+
+    Args:
+        run_name: Passed to StepCounterWrapper to name the results CSV.
+
+    Returns:
+        A class whose instantiation returns the fully wrapped environment.
     """
     import tmrl.config.config_objects as cfg_obj
-    from envs.augmented_lidar_env import WaypointAugmentedEnv
     from envs.step_counter import StepCounterWrapper
 
     base_cls = cfg_obj.ENV_CLS
     results_dir = str(RESULTS_DIR)
 
-    if variant in ("A", "B"):
-        class EnvCls:
-            def __new__(cls):
-                env = base_cls()
-                return StepCounterWrapper(env, run_name=run_name, results_dir=results_dir)
-    else:
-        class EnvCls:
-            def __new__(cls):
-                env = base_cls()
-                return CarPosWrapper(env, run_name=run_name, results_dir=results_dir,
-                                     car_pos_ref=car_pos_ref)
+    class EnvCls:
+        def __new__(cls):
+            env = base_cls()
+            return StepCounterWrapper(env, run_name=run_name, results_dir=results_dir)
 
     return EnvCls
 
 
 # ---------------------------------------------------------------------------
-# Role runners
-#
 # Server and Trainer delegate directly to `python -m tmrl` — they never
 # instantiate the env, so there's no reason to fight TMRL's internal API.
-# TMRL_CONFIG_PATH is already set, so they pick up the right config.
+# config.json is already in place, so they pick up the right config.
 #
 # Only the Worker needs our custom env_cls, because that's the only process
 # that actually calls env_cls() to collect experience.
@@ -190,9 +136,9 @@ def make_env_cls(variant, track_pkl, n_waypoints, stride, run_name, car_pos_ref=
 def run_server():
     """
     Delegate to `python -m tmrl --server`.
-    ~/TmrlData/config.json is already set to the right variant config.
+    ~/TmrlData/config/config.json is already set by _set_config().
     """
-    import subprocess, sys
+    import subprocess
     subprocess.run(
         [sys.executable, "-m", "tmrl", "--server"],
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -200,13 +146,13 @@ def run_server():
     )
 
 
-def run_trainer(env_cls, wandb=False):
+def run_trainer(wandb=False):
     """
     Delegate to `python -m tmrl --trainer`.
-    ~/TmrlData/config.json is already set to the right variant config
-    by _set_config(), so tmrl picks it up automatically.
+    ~/TmrlData/config/config.json is already set by _set_config(),
+    so tmrl picks it up automatically.
     """
-    import subprocess, sys
+    import subprocess
     cmd = [sys.executable, "-m", "tmrl", "--trainer"]
     if wandb:
         cmd.append("--wandb")
@@ -216,64 +162,18 @@ def run_trainer(env_cls, wandb=False):
         check=True,
     )
 
-def make_sample_compressor(variant, track_pkl, n_waypoints, stride, car_pos_ref):
-    import tmrl.config.config_objects as cfg_obj
-    base = cfg_obj.SAMPLE_COMPRESSOR
-    if variant not in ("C", "D"):
-        return base
-    from envs.augmented_lidar_env import load_centerline, smooth_racing_line, get_lookahead_waypoints
-    import numpy as np
-    track = track_pkl if Path(track_pkl).is_absolute() else str(PROJECT_ROOT / track_pkl)
-    centerline = load_centerline(track)
-    line = smooth_racing_line(centerline) if variant == "D" else centerline
-    mid = len(line) // 2
 
-    def compressor(*args):
-        # sample is (act, obs, rew, terminated, truncated, info) or similar
-        # base compressor converts obs Tuple -> compressed form
-        compressed = base(*args)
-        car_xz = np.array(car_pos_ref[0]) if car_pos_ref[0] is not None else line[mid, [0, 2]]
-        extra = get_lookahead_waypoints(car_xz, line, n_waypoints, stride)
-        # append waypoints to the obs portion of the compressed sample
-        # compressed[1] is the obs
-        obs = compressed[1]
-        if isinstance(obs, (tuple, list)):
-            obs_flat = np.concatenate([np.array(o).flatten() for o in obs])
-        else:
-            obs_flat = np.array(obs).flatten()
-        obs_aug = np.concatenate([obs_flat, extra]).astype(np.float32)
-        return (compressed[0], obs_aug, *compressed[2:])
-    return compressor
-
-def make_obs_preprocessor(variant, track_pkl, n_waypoints, stride, car_pos_ref):
+def run_worker(env_cls):
     """
-    car_pos_ref is a list [xz] shared between the env and preprocessor.
-    The env updates it on every step; the preprocessor reads it.
+    Build and run a TMRL RolloutWorker with our custom env.
+
+    The worker is the only process that actually steps through the environment
+    and sends experience to the server. Everything else (obs space, reward,
+    action space) is determined by the base TMRL config.
+
+    Args:
+        env_cls: The env class returned by make_env_cls().
     """
-    import tmrl.config.config_objects as cfg_obj
-    base_preprocessor = cfg_obj.OBS_PREPROCESSOR
-    if variant not in ("C", "D"):
-        return base_preprocessor
-    from envs.augmented_lidar_env import load_centerline, smooth_racing_line, get_lookahead_waypoints
-    import numpy as np
-    track = track_pkl if Path(track_pkl).is_absolute() else str(PROJECT_ROOT / track_pkl)
-    centerline = load_centerline(track)
-    line = smooth_racing_line(centerline) if variant == "D" else centerline
-    mid = len(line) // 2
-
-    def preprocessor(obs):
-        obs = base_preprocessor(obs)   # may still be a tuple
-        if isinstance(obs, (tuple, list)):
-            flat = np.concatenate([np.array(o).flatten() for o in obs])
-        else:
-            flat = np.array(obs).flatten()
-        car_xz = np.array(car_pos_ref[0]) if car_pos_ref[0] is not None else line[mid, [0, 2]]
-        extra = get_lookahead_waypoints(car_xz, line, n_waypoints, stride)
-        return np.concatenate([flat, extra]).astype(np.float32)
-    return preprocessor
-
-
-def run_worker(env_cls, variant="A", track_pkl="rewards/reward_track1.pkl", n_waypoints=5, stride=10, car_pos_ref=None):
     import tmrl.config.config_constants as cfg
     import tmrl.config.config_objects as cfg_obj
     from tmrl.networking import RolloutWorker
@@ -293,59 +193,35 @@ def run_worker(env_cls, variant="A", track_pkl="rewards/reward_track1.pkl", n_wa
     worker.run()
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Unified launcher for all observation-space ablation variants.",
+        description="Launcher for the raw LiDAR SAC experiment.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--variant", choices=["A", "B", "C", "D"], required=True)
-    parser.add_argument("--role", choices=["server", "trainer", "worker"], required=True)
+    parser.add_argument("--role", choices=["server", "trainer", "worker"], required=True,
+                        help="Which TMRL process to start.")
     parser.add_argument("--track", default="rewards/reward_track1.pkl",
-                        help="Track reward .pkl. Copied into TMRL's reward slot "
-                             "(all variants) AND used for waypoint obs (C/D).")
-    parser.add_argument("--n_waypoints", type=int, default=5)
-    parser.add_argument("--stride", type=int, default=10,
-                        help="Waypoint stride in raw-point units (10 = 1 m apart)")
+                        help="Track reward .pkl copied into TMRL's reward slot before the worker starts.")
     parser.add_argument("--wandb", action="store_true",
-                    help="Enable WandB logging for the trainer.")
+                        help="Enable WandB logging for the trainer.")
     args = parser.parse_args()
 
-    # Set TMRL_CONFIG_PATH before any tmrl import — subprocess inherits it too
-    run_name = _set_config(args.variant)
+    run_name = _set_config()
 
-    obs_note = {
-        "A": "81-dim LiDAR",
-        "B": "image stack (TM20FULL)",
-        "C": f"{81 + args.n_waypoints * 2}-dim LiDAR+waypoints",
-        "D": f"{81 + args.n_waypoints * 2}-dim LiDAR+racing-line",
-    }[args.variant]
-    print(f"[run_experiment] variant={args.variant} | role={args.role} | obs={obs_note}\n")
+    print(f"[run_experiment] role={args.role} | obs=81-dim LiDAR\n")
 
-    # Server and trainer delegate to `python -m tmrl` — they never touch the env.
-    # TMRL_CONFIG_PATH is inherited by the subprocess so the right config is used.
     if args.role == "server":
         run_server()
+
     elif args.role == "trainer":
-        run_trainer(env_cls=None, wandb=args.wandb)
+        run_trainer(wandb=args.wandb)
+
     elif args.role == "worker":
         # Install the reward file for this track BEFORE building the env.
         # This is what makes --track actually control the reward signal.
         _install_reward_file(args.track)
-        # Only the worker needs the custom env — build it here
-        car_pos_ref = [None]   # shared mutable: env writes, preprocessor reads
-        env_cls = make_env_cls(
-            variant=args.variant,
-            track_pkl=args.track,
-            n_waypoints=args.n_waypoints,
-            stride=args.stride,
-            run_name=run_name,
-            car_pos_ref=car_pos_ref,
-        )
-        run_worker(env_cls, args.variant, args.track, args.n_waypoints, args.stride, car_pos_ref)
+        env_cls = make_env_cls(run_name=run_name)
+        run_worker(env_cls)
 
 
 if __name__ == "__main__":

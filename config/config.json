@@ -1,8 +1,8 @@
 {
-  "RUN_NAME": "SAC_4_LIDAR_pretrained",
+  "RUN_NAME": "NoCurriculum",
   "RESET_TRAINING": false,
   "BUFFERS_MAXLEN": 500000,
-  "RW_MAX_SAMPLES_PER_EPISODE": 1000,
+  "RW_MAX_SAMPLES_PER_EPISODE": 4000,
   "CUDA_TRAINING": true,
   "CUDA_INFERENCE": false,
   "VIRTUAL_GAMEPAD": true,
@@ -15,9 +15,9 @@
   "TLS_HOSTNAME": "default",
   "TLS_CREDENTIALS_DIRECTORY": "",
   "NB_WORKERS": -1,
-  "WANDB_PROJECT": "tmrl",
-  "WANDB_ENTITY": "tmrl",
-  "WANDB_KEY": "df28d4daa98d2df2557d74caf78e40c68adaf288",
+  "WANDB_PROJECT": "NoCurriculum",
+  "WANDB_ENTITY": "matiss-kalnare-universiteit-leiden",
+  "WANDB_KEY": "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",
   "PORT": 55555,
   "LOCAL_PORT_SERVER": 55556,
   "LOCAL_PORT_TRAINER": 55557,
@@ -39,12 +39,12 @@
   "WAIT_BEFORE_RECONNECTION": 10.0,
   "LOOP_SLEEP_TIME": 1.0,
   "MAX_EPOCHS": 10000,
-  "ROUNDS_PER_EPOCH": 100,
-  "TRAINING_STEPS_PER_ROUND": 200,
+  "ROUNDS_PER_EPOCH": 10,
+  "TRAINING_STEPS_PER_ROUND": 1000,
   "MAX_TRAINING_STEPS_PER_ENVIRONMENT_STEP": 4.0,
   "ENVIRONMENT_STEPS_BEFORE_TRAINING": 1000,
-  "UPDATE_MODEL_INTERVAL": 200,
-  "UPDATE_BUFFER_INTERVAL": 200,
+  "UPDATE_MODEL_INTERVAL": 1000,
+  "UPDATE_BUFFER_INTERVAL": 1000,
   "SAVE_MODEL_EVERY": 0,
   "MEMORY_SIZE": 1000000,
   "BATCH_SIZE": 256,
@@ -72,6 +72,9 @@
     "RTGYM_INTERFACE": "TM20LIDAR",
     "WINDOW_WIDTH": 958,
     "WINDOW_HEIGHT": 488,
+	"IMG_WIDTH": 64,
+    "IMG_HEIGHT": 64,
+	"IMG_GRAYSCALE": true,
     "SLEEP_TIME_AT_RESET": 1.5,
     "IMG_HIST_LEN": 4,
     "RTGYM_CONFIG": {
@@ -80,17 +83,19 @@
       "time_step_timeout_factor": 1.0,
       "act_buf_len": 2,
       "benchmark": false,
-      "wait_on_done": true
+      "wait_on_done": true,
+      "ep_max_length": 4000,
+	  "interface_kwargs": {"save_replays": false}
     },
-    "REWARD_CONFIG": {
-      "END_OF_TRACK": 100.0,
-      "CONSTANT_PENALTY": 0.0,
-      "CHECK_FORWARD": 500,
-      "CHECK_BACKWARD": 10,
-      "FAILURE_COUNTDOWN": 10,
-      "MIN_STEPS": 70,
-      "MAX_STRAY": 100.0
-    }
+	"REWARD_CONFIG": {
+		"END_OF_TRACK": 6.0,
+		"CONSTANT_PENALTY": 0.0,
+		"CHECK_FORWARD": 500,
+		"CHECK_BACKWARD": 10,
+		"FAILURE_COUNTDOWN": 30,
+		"MIN_STEPS": 70,
+		"MAX_STRAY": 100.0
+	}
   },
   "__VERSION__": "0.6.0"
 }
