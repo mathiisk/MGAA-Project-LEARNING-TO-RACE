@@ -29,3 +29,6 @@ wandb/
 # OS
 .DS_Store
 Thumbs.db
+
+# Results
+results/
