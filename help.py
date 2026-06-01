@@ -1,6 +1,4 @@
 """
-help.py — overview of all runnable scripts in this project.
-
 Usage:
     python src/help.py
     python src/help.py --script inspect_track
@@ -10,10 +8,6 @@ import argparse
 from pathlib import Path
 
 REWARDS_DIR = Path(__file__).resolve().parent.parent / "rewards"
-
-# ---------------------------------------------------------------------------
-# Per-script documentation
-# ---------------------------------------------------------------------------
 
 SCRIPTS = {
     "run_experiment": {
