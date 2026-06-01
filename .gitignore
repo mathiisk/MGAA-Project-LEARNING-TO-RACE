@@ -33,3 +33,5 @@ Thumbs.db
 # Results
 .results/
 .track_results/
+*.csv
+/tracks_resutls
