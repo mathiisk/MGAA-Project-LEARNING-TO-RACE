@@ -71,6 +71,35 @@ SCRIPTS = {
             ) if REWARDS_DIR.exists() else "    (rewards/ folder not found)"
         ),
     },
+    
+    "evaluate": {
+    "file": "src/evaluate.py",
+    "description": "Evaluate a trained TMRL agent for N episodes and report paper metrics (completion rate, lap time, etc.).",
+    "usage": [
+        "python src/evaluate.py",
+        "python src/evaluate.py --weights ~/TmrlData/weights/Curriculum.tmod",
+        "python src/evaluate.py --track rewards/reward_track_held_out.pkl",
+        "python src/evaluate.py --weights ~/TmrlData/weights/NoCurriculum.tmod --track rewards/reward_held_out.pkl --runs 20 --label baseline_generalisation",
+    ],
+    "arguments": {
+        "--weights": "Path to a .tmod weights file. Defaults to ~/TmrlData/weights/<RUN_NAME>.tmod (currently installed).",
+        "--track":   "Path to a reward track .pkl file. Default: rewards/reward_track1.pkl.",
+        "--runs":    "Number of evaluation rollouts. Default: 20.",
+        "--label":   "Label for the output CSV filename (eval_<label>.csv). Defaults to <RUN_NAME>_<track_stem>.",
+        "--config":  "Path to config.json. Default: config/config.json.",
+    },
+    "notes": (
+        "Does NOT require the server or trainer to be running.\n"
+        "Outputs:\n"
+        "  results/eval_<label>.csv     — one row per episode\n"
+        "  results/eval_summary.csv     — one summary row appended per run\n"
+        "Metrics reported (completed laps only):\n"
+        "  - Lap completion rate\n"
+        "  - Mean episode length (steps)\n"
+        "  - Mean wall-clock lap time (seconds)\n"
+        "  - Fastest lap time (seconds)"
+    ),
+},
 }
 
 
